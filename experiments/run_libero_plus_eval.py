@@ -20,7 +20,7 @@ import numpy as np
 import tqdm
 from libero.libero import benchmark
 
-import swanlab
+# import swanlab
 from transformers import AutoProcessor
 import torch
 import random
@@ -162,12 +162,12 @@ def setup_logging(cfg: GenerateConfig):
         api_key = os.environ.get("SWANLAB_API_KEY", None) or cfg.swanlab_api_key
         if api_key:
             swanlab.login(api_key)  # NOTE: previous login information will be overwritten
-        swanlab.init(
-            project=cfg.project_name,
-            experiment_name=run_id,
-            logdir=cfg.local_log_dir,
-            mode=cfg.swanlab_mode,
-        )
+            swanlab.init(
+                project=cfg.project_name,
+                experiment_name=run_id,
+                logdir=cfg.local_log_dir,
+                mode=cfg.swanlab_mode,
+            )
 
     return log_file, local_log_filepath, run_id
 
