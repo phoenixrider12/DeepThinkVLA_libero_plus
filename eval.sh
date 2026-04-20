@@ -14,7 +14,7 @@ export CUDA_VISIBLE_DEVICES=0
 python experiments/run_libero_plus_eval.py \
     --pretrained_checkpoint yinchenghust/sft_cot \
     --num_images_in_input 2 \
-    --task_suite_name libero_object \
+    --task_suite_name libero_10 \
     --max_new_tokens 2048 \
     --project_name $SWANLAB_PROJECT_NAME \
     --swanlab_api_key $SWANLAB_API_KEY \

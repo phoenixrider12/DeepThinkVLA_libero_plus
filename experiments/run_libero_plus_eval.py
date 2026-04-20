@@ -428,9 +428,10 @@ def eval_libero(cfg: GenerateConfig) -> float:
     log_message(f"Overall success rate: {final_success_rate:.4f} ({final_success_rate * 100:.1f}%)", log_file)
 
     # Close log file
-    with open(cfg.task_suite_name.lower()+'_success_outcome.json', "w") as f:
+    checkpoint_name = Path(cfg.pretrained_checkpoint).name
+    with open(f"{cfg.task_suite_name.lower()}_{checkpoint_name}_success_outcome.json", "w") as f:
         json.dump(result_success_dict, f, indent=4)
-    with open(cfg.task_suite_name.lower()+'_fail_outcome.json', "w") as f:
+    with open(f"{cfg.task_suite_name.lower()}_{checkpoint_name}_fail_outcome.json", "w") as f:
         json.dump(result_fail_dict, f, indent=4)
     if log_file:
         log_file.close()
