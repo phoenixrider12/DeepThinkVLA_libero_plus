@@ -340,9 +340,8 @@ def run_task(
         log_file,
     )
 
-    # Save replay video
     save_rollout_video(
-        replay_images, success=success, task_description=task_description, log_file=log_file
+        replay_images, success=success, task_description=task_description, log_file=log_file, episode_id=task_id
     )
 
     # Log results

@@ -73,12 +73,13 @@ def get_libero_wrist_image(obs):
     return img
 
 
-def save_rollout_video(rollout_images, success, task_description, log_file=None):
+def save_rollout_video(rollout_images, success, task_description, log_file=None, episode_id=None):
     """Saves an MP4 replay of an episode."""
     rollout_dir = f"./rollouts/{DATE}"
     os.makedirs(rollout_dir, exist_ok=True)
     processed_task_description = task_description.lower().replace(" ", "_").replace("\n", "_").replace(".", "_")[:50]
-    mp4_path = f"{rollout_dir}/{DATE_TIME}--success={success}--task={processed_task_description}.mp4"
+    episode_str = f"--ep={episode_id}" if episode_id is not None else ""
+    mp4_path = f"{rollout_dir}/{DATE_TIME}{episode_str}--success={success}--task={processed_task_description}.mp4"
 
     # Ensure all frames have the same size.
     # This avoids: ValueError("All images in a movie should have same size")
