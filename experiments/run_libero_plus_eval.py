@@ -227,6 +227,7 @@ def run_episode(
     resize_size,
     processor=None,
     initial_state=None,
+    save_video=False,
     log_file=None,
 ):
     """Run a single episode in the environment."""
@@ -283,7 +284,8 @@ def run_episode(
 
             # Process action
             action = binarize_gripper_action(action)
-            replay_images[-1] = compose_with_sidepanel(replay_images[-1], cot_replay[-1] if len(cot_replay) > 0 else None, panel_width_px=cfg.panel_width_px)
+            if save_video:
+                replay_images[-1] = compose_with_sidepanel(replay_images[-1], cot_replay[-1] if len(cot_replay) > 0 else None, panel_width_px=cfg.panel_width_px)
 
             # Execute action in environment
             obs, reward, done, info = env.step(action.tolist())
@@ -327,6 +329,8 @@ def run_task(
     else:
         raise('now is not supported')
 
+    save_video = (task_id % 100 == 0)
+
     # Run episode
     success, replay_images = run_episode(
         cfg,
@@ -337,12 +341,14 @@ def run_task(
         resize_size,
         processor,
         initial_state,
+        save_video,
         log_file,
     )
 
-    save_rollout_video(
-        replay_images, success=success, task_description=task_description, log_file=log_file, episode_id=task_id
-    )
+    if save_video:
+        save_rollout_video(
+            replay_images, success=success, task_description=task_description, log_file=log_file, episode_id=task_id
+        )
 
     # Log results
     log_message(f"Success: {success}", log_file)
@@ -400,6 +406,7 @@ def eval_libero(cfg: GenerateConfig) -> float:
         'Sensor Noise': 0,
     }
     total_successes = 0
+    checkpoint_name = Path(cfg.pretrained_checkpoint).name
     for task_id in tqdm.tqdm(range(num_tasks)):
         # task_id = 0
         success = run_task(
@@ -416,6 +423,12 @@ def eval_libero(cfg: GenerateConfig) -> float:
         result_fail_dict[name_to_category[task_suite.get_task_names()[task_id]]] += 1 if not success else 0
         if success:
             total_successes += 1
+            
+        if (task_id + 1) % 10 == 0:
+            with open(f"{cfg.task_suite_name.lower()}_{checkpoint_name}_success_outcome.json", "w") as f:
+                json.dump(result_success_dict, f, indent=4)
+            with open(f"{cfg.task_suite_name.lower()}_{checkpoint_name}_fail_outcome.json", "w") as f:
+                json.dump(result_fail_dict, f, indent=4)
 
     # Calculate final success rate
     final_success_rate = float(total_successes) / float(num_tasks)
@@ -427,7 +440,6 @@ def eval_libero(cfg: GenerateConfig) -> float:
     log_message(f"Overall success rate: {final_success_rate:.4f} ({final_success_rate * 100:.1f}%)", log_file)
 
     # Close log file
-    checkpoint_name = Path(cfg.pretrained_checkpoint).name
     with open(f"{cfg.task_suite_name.lower()}_{checkpoint_name}_success_outcome.json", "w") as f:
         json.dump(result_success_dict, f, indent=4)
     with open(f"{cfg.task_suite_name.lower()}_{checkpoint_name}_fail_outcome.json", "w") as f:
