@@ -7,6 +7,8 @@ export SWANLAB_API_KEY='YOUR_API_KEY'
 # If you want SwanLab logging, set SWANLAB_API_KEY in your environment and set SWANLAB_MODE to 'cloud-only' or 'local'.
 export SWANLAB_MODE='disabled' # cloud-only, local, disabled
 export CUDA_VISIBLE_DEVICES=0
+export MUJOCO_GL=egl
+export PYOPENGL_PLATFORM=egl
 
 
 # libero_object, libero_spatial, libero_goal, libero_10, libero_90
