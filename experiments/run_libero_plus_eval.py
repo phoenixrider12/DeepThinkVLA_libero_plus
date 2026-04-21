@@ -329,7 +329,7 @@ def run_task(
     else:
         raise('now is not supported')
 
-    save_video = (task_id % 100 == 0)
+    save_video = (task_id % 25 == 0)                                    # saving video every 25 runs
 
     # Run episode
     success, replay_images = run_episode(
@@ -382,7 +382,7 @@ def eval_libero(cfg: GenerateConfig) -> float:
     # Initialize LIBERO task suite
     benchmark_dict = benchmark.get_benchmark_dict()
     task_suite = benchmark_dict[cfg.task_suite_name]()
-    num_tasks = task_suite.n_tasks
+    num_tasks = min(task_suite.n_tasks, 500)
 
     log_message(f"Task suite: {cfg.task_suite_name}", log_file)
 

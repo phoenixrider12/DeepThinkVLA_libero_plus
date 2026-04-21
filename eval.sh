@@ -14,7 +14,7 @@ export SAPIEN_RENDERER=cpu
 # libero_object, libero_spatial, libero_goal, libero_10, libero_90
 
 python experiments/run_libero_plus_eval.py \
-    --pretrained_checkpoint yinchenghust/sft_cot \
+    --pretrained_checkpoint checkpoints/base_cot \
     --num_images_in_input 2 \
     --task_suite_name libero_10 \
     --max_new_tokens 2048 \
