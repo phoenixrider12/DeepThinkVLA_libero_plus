@@ -6,8 +6,12 @@ Evaluates a trained policy in a LIBERO simulation benchmark task suite.
 import sys
 sys.path.append("./")
 import json
+import importlib
+import inspect
 import logging
 import os
+import pkgutil
+import shutil
 import sys
 from collections import deque
 from dataclasses import dataclass
@@ -19,6 +23,7 @@ import draccus
 import numpy as np
 import tqdm
 from libero.libero import benchmark
+from libero.libero import get_libero_path
 
 # import swanlab
 from transformers import AutoProcessor
@@ -56,6 +61,30 @@ class TaskSuite(str, Enum):
     LIBERO_10 = "libero_10"
     LIBERO_90 = "libero_90"
     LIBERO_MIX = 'libero_mix'
+    LIBERO_GOAL_TEMP = "libero_goal_temp"
+    LIBERO_SPATIAL_TEMP = "libero_spatial_temp"
+    LIBERO_10_TEMP = "libero_10_temp"
+    LIBERO_OBJECT_TEMP = "libero_object_temp"
+    LIBERO_GOAL_LAN = "libero_goal_lan"
+    LIBERO_SPATIAL_LAN = "libero_spatial_lan"
+    LIBERO_10_LAN = "libero_10_lan"
+    LIBERO_OBJECT_LAN = "libero_object_lan"
+    LIBERO_GOAL_OBJECT = "libero_goal_object"
+    LIBERO_SPATIAL_OBJECT = "libero_spatial_object"
+    LIBERO_10_OBJECT = "libero_10_object"
+    LIBERO_OBJECT_OBJECT = "libero_object_object"
+    LIBERO_GOAL_SWAP = "libero_goal_swap"
+    LIBERO_SPATIAL_SWAP = "libero_spatial_swap"
+    LIBERO_10_SWAP = "libero_10_swap"
+    LIBERO_OBJECT_SWAP = "libero_object_swap"
+    LIBERO_GOAL_TASK = "libero_goal_task"
+    LIBERO_SPATIAL_TASK = "libero_spatial_task"
+    LIBERO_10_TASK = "libero_10_task"
+    LIBERO_OBJECT_TASK = "libero_object_task"
+    LIBERO_GOAL_ENV = "libero_goal_env"
+    LIBERO_SPATIAL_ENV = "libero_spatial_env"
+    LIBERO_10_ENV = "libero_10_env"
+    LIBERO_OBJECT_ENV = "libero_object_env"
 
 
 # Define max steps for each task suite
@@ -65,7 +94,47 @@ TASK_MAX_STEPS = {
     TaskSuite.LIBERO_GOAL: 300,  # longest training demo has 270 steps
     TaskSuite.LIBERO_10: 620,  # longest training demo has 620 steps
     TaskSuite.LIBERO_90: 400,  # longest training demo has 373 steps
+    TaskSuite.LIBERO_GOAL_TEMP: 300,
+    TaskSuite.LIBERO_SPATIAL_TEMP: 220,
+    TaskSuite.LIBERO_10_TEMP: 520,
+    TaskSuite.LIBERO_OBJECT_TEMP: 280,
+    TaskSuite.LIBERO_GOAL_LAN: 300,
+    TaskSuite.LIBERO_SPATIAL_LAN: 220,
+    TaskSuite.LIBERO_10_LAN: 520,
+    TaskSuite.LIBERO_OBJECT_LAN: 280,
+    TaskSuite.LIBERO_GOAL_OBJECT: 300,
+    TaskSuite.LIBERO_SPATIAL_OBJECT: 220,
+    TaskSuite.LIBERO_10_OBJECT: 520,
+    TaskSuite.LIBERO_OBJECT_OBJECT: 280,
+    TaskSuite.LIBERO_GOAL_SWAP: 300,
+    TaskSuite.LIBERO_SPATIAL_SWAP: 220,
+    TaskSuite.LIBERO_10_SWAP: 520,
+    TaskSuite.LIBERO_OBJECT_SWAP: 280,
+    TaskSuite.LIBERO_GOAL_TASK: 300,
+    TaskSuite.LIBERO_SPATIAL_TASK: 220,
+    TaskSuite.LIBERO_10_TASK: 520,
+    TaskSuite.LIBERO_OBJECT_TASK: 280,
+    TaskSuite.LIBERO_GOAL_ENV: 300,
+    TaskSuite.LIBERO_SPATIAL_ENV: 220,
+    TaskSuite.LIBERO_10_ENV: 520,
+    TaskSuite.LIBERO_OBJECT_ENV: 280,
 }
+
+LIBERO_PRO_PERTURBATION_CATEGORIES = {
+    "lan": "Semantic Perturbation",
+    "object": "Object Perturbation",
+    "swap": "Position Perturbation",
+    "task": "Task Perturbation",
+    "env": "Environment Perturbation",
+}
+
+LIBERO_PRO_SUITE_NAMES = {
+    f"{base_suite}_{perturbation}"
+    for perturbation in LIBERO_PRO_PERTURBATION_CATEGORIES
+    for base_suite in ["libero_goal", "libero_spatial", "libero_10", "libero_object"]
+}
+
+LIBERO_PRO_RESULT_CATEGORIES = list(LIBERO_PRO_PERTURBATION_CATEGORIES.values())
 
 
 # Set up logging
@@ -100,6 +169,8 @@ class GenerateConfig:
     task_suite_name: str = TaskSuite.LIBERO_OBJECT     # Task suite
     num_steps_wait: int = 10                         # Number of steps to wait for objects to stabilize in sim
     initial_states_path: str = "DEFAULT"             # "DEFAULT", or path to initial states JSON file
+    libero_pro_dataset_dir: Optional[str] = None      # Path to LIBERO-Pro-dataset with bddl_files/ and init_files/
+    link_libero_pro_assets: bool = True               # Symlink Pro bddl/init folders into this LIBERO checkout if missing
     env_img_res: int = 256                           # Resolution for environment images (not policy input resolution)
 
     #################################################################################################################
@@ -138,7 +209,207 @@ def validate_config(cfg: GenerateConfig) -> None:
     assert cfg.pretrained_checkpoint is not None, "pretrained_checkpoint must not be None!"
 
     # Validate task suite
-    assert cfg.task_suite_name in [suite.value for suite in TaskSuite], f"Invalid task suite: {cfg.task_suite_name}"
+    benchmark_dict = benchmark.get_benchmark_dict()
+    assert cfg.task_suite_name in benchmark_dict, (
+        f"Invalid task suite: {cfg.task_suite_name}. "
+        f"Available suites include: {', '.join(sorted(benchmark_dict.keys()))}"
+    )
+
+
+def is_libero_pro_suite(task_suite_name: str) -> bool:
+    """Return True for LIBERO-Pro perturbation suites."""
+    return task_suite_name in LIBERO_PRO_SUITE_NAMES
+
+
+def get_libero_pro_category(task_suite_name: str) -> Optional[str]:
+    """Map a LIBERO-Pro suite suffix to the perturbation category from the dataset card."""
+    return LIBERO_PRO_PERTURBATION_CATEGORIES.get(task_suite_name.rsplit("_", 1)[-1])
+
+
+def ensure_libero_pro_assets(cfg: GenerateConfig, log_file=None) -> None:
+    """Make LIBERO-Pro bddl/init files visible to this vendored LIBERO checkout."""
+    if not is_libero_pro_suite(cfg.task_suite_name):
+        return
+
+    bddl_suite_dir = Path(get_libero_path("bddl_files")) / cfg.task_suite_name
+    init_suite_dir = Path(get_libero_path("init_states")) / cfg.task_suite_name
+
+    if bddl_suite_dir.exists() and init_suite_dir.exists():
+        if cfg.libero_pro_dataset_dir is not None:
+            dataset_dir = Path(cfg.libero_pro_dataset_dir).expanduser().resolve()
+            ensure_libero_pro_framework_assets(dataset_dir, cfg.link_libero_pro_assets, log_file)
+        return
+
+    if cfg.libero_pro_dataset_dir is None:
+        missing = []
+        if not bddl_suite_dir.exists():
+            missing.append(str(bddl_suite_dir))
+        if not init_suite_dir.exists():
+            missing.append(str(init_suite_dir))
+        raise FileNotFoundError(
+            "LIBERO-Pro assets are missing. Copy/symlink the dataset-card folders into this LIBERO checkout "
+            f"or pass --libero_pro_dataset_dir /path/to/LIBERO-Pro-dataset. Missing: {missing}"
+        )
+
+    dataset_dir = Path(cfg.libero_pro_dataset_dir).expanduser().resolve()
+    source_dirs = {
+        "bddl_files": dataset_dir / "bddl_files" / cfg.task_suite_name,
+        "init_files": dataset_dir / "init_files" / cfg.task_suite_name,
+    }
+    target_dirs = {
+        "bddl_files": bddl_suite_dir,
+        "init_files": init_suite_dir,
+    }
+
+    for asset_kind, source_dir in source_dirs.items():
+        if not source_dir.exists():
+            raise FileNotFoundError(f"Missing LIBERO-Pro {asset_kind} suite folder: {source_dir}")
+
+        target_dir = target_dirs[asset_kind]
+        if target_dir.exists():
+            continue
+
+        target_dir.parent.mkdir(parents=True, exist_ok=True)
+        if cfg.link_libero_pro_assets:
+            os.symlink(source_dir, target_dir, target_is_directory=True)
+            log_message(f"Linked LIBERO-Pro {asset_kind}: {target_dir} -> {source_dir}", log_file)
+        else:
+            shutil.copytree(source_dir, target_dir)
+            log_message(f"Copied LIBERO-Pro {asset_kind}: {source_dir} -> {target_dir}", log_file)
+
+    ensure_libero_pro_framework_assets(dataset_dir, cfg.link_libero_pro_assets, log_file)
+
+
+def ensure_libero_pro_framework_assets(
+    dataset_dir: Path,
+    use_symlinks: bool,
+    log_file=None,
+) -> None:
+    """Mirror LIBERO-Pro framework assets referenced by Pro BDDL files."""
+    libero_pro_repo_dir = dataset_dir.parent
+    source_assets_dir = libero_pro_repo_dir / "libero" / "libero" / "assets"
+    target_assets_dir = Path(get_libero_path("assets"))
+
+    if not source_assets_dir.exists():
+        log_message(
+            f"LIBERO-Pro framework assets not found at {source_assets_dir}; "
+            "skipping optional asset mirroring.",
+            log_file,
+        )
+        return
+
+    for source_path in source_assets_dir.rglob("*"):
+        if source_path.is_dir():
+            continue
+
+        target_path = target_assets_dir / source_path.relative_to(source_assets_dir)
+        if target_path.exists():
+            continue
+
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        if use_symlinks:
+            os.symlink(source_path, target_path)
+        else:
+            shutil.copy2(source_path, target_path)
+
+    log_message(f"Checked LIBERO-Pro framework assets from {source_assets_dir}", log_file)
+    ensure_libero_pro_object_registry(libero_pro_repo_dir, use_symlinks, log_file)
+
+
+def ensure_libero_pro_object_registry(
+    libero_pro_repo_dir: Path,
+    use_symlinks: bool,
+    log_file=None,
+) -> None:
+    """Mirror LIBERO-Pro object registry code for Pro-only fixture categories."""
+    source_objects_dir = libero_pro_repo_dir / "libero" / "libero" / "envs" / "objects"
+    target_objects_dir = Path(__file__).resolve().parents[1] / "libero" / "libero" / "envs" / "objects"
+
+    if not source_objects_dir.exists():
+        log_message(
+            f"LIBERO-Pro object registry not found at {source_objects_dir}; "
+            "skipping optional object-code mirroring.",
+            log_file,
+        )
+        return
+
+    for source_path in source_objects_dir.rglob("*.py"):
+        target_path = target_objects_dir / source_path.relative_to(source_objects_dir)
+
+        if target_path.exists() and target_path.read_bytes() == source_path.read_bytes():
+            continue
+
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        if target_path.exists() or not use_symlinks:
+            shutil.copy2(source_path, target_path)
+        else:
+            os.symlink(source_path, target_path)
+
+    importlib.invalidate_caches()
+    objects_module = sys.modules.get("libero.libero.envs.objects")
+    if objects_module is not None:
+        importlib.reload(objects_module)
+
+    register_libero_pro_object_aliases(log_file)
+    log_message(f"Checked LIBERO-Pro object registry from {source_objects_dir}", log_file)
+
+
+def _normalize_registry_name(name: str) -> str:
+    return name.lower().replace("_", "")
+
+
+def register_libero_pro_object_aliases(log_file=None) -> None:
+    """Register Pro object names that older LIBERO registries may omit."""
+    objects_module = importlib.import_module("libero.libero.envs.objects")
+    objects_dict = getattr(objects_module, "OBJECTS_DICT", None)
+    if not isinstance(objects_dict, dict):
+        return
+
+    if "yellow_cabinet" in objects_dict:
+        return
+
+    for _, module_name, _ in pkgutil.walk_packages(objects_module.__path__, objects_module.__name__ + "."):
+        module = importlib.import_module(module_name)
+        for attr_name, attr_value in inspect.getmembers(module, inspect.isclass):
+            normalized_name = _normalize_registry_name(attr_name)
+            if normalized_name in {"yellowcabinet", "yellowcabinetobject"}:
+                objects_dict["yellow_cabinet"] = attr_value
+                log_message("Registered LIBERO-Pro object alias: yellow_cabinet", log_file)
+                return
+
+    for fallback_name in ["wooden_cabinet", "cabinet"]:
+        if fallback_name in objects_dict:
+            objects_dict["yellow_cabinet"] = objects_dict[fallback_name]
+            log_message(
+                f"Registered LIBERO-Pro object fallback: yellow_cabinet -> {fallback_name}",
+                log_file,
+            )
+            return
+
+
+def make_result_dict(cfg: GenerateConfig) -> dict:
+    """Create a result counter matching LIBERO+ or LIBERO-Pro reporting."""
+    if is_libero_pro_suite(cfg.task_suite_name):
+        return {category: 0 for category in LIBERO_PRO_RESULT_CATEGORIES}
+    return {
+        'Objects Layout': 0,
+        'Language Instructions': 0,
+        'Light Conditions': 0,
+        'Camera Viewpoints': 0,
+        'Robot Initial States' : 0,
+        'Background Textures': 0,
+        'Sensor Noise': 0,
+    }
+
+
+def get_result_category(cfg: GenerateConfig, task_name: str, name_to_category: dict) -> str:
+    """Get the reporting bucket for one evaluated task."""
+    if is_libero_pro_suite(cfg.task_suite_name):
+        category = get_libero_pro_category(cfg.task_suite_name)
+        if category is None:
+            raise KeyError(f"No LIBERO-Pro category mapping for suite: {cfg.task_suite_name}")
+        return category
+    return name_to_category[task_name]
 
 
 
@@ -378,6 +649,7 @@ def eval_libero(cfg: GenerateConfig) -> float:
     ##########################################################################################
     # Setup logging
     log_file, local_log_filepath, run_id = setup_logging(cfg)
+    ensure_libero_pro_assets(cfg, log_file)
 
     # Initialize LIBERO task suite
     benchmark_dict = benchmark.get_benchmark_dict()
@@ -387,24 +659,8 @@ def eval_libero(cfg: GenerateConfig) -> float:
     log_message(f"Task suite: {cfg.task_suite_name}", log_file)
 
     # Start evaluation
-    result_success_dict = {
-        'Objects Layout': 0,
-        'Language Instructions': 0,
-        'Light Conditions': 0,
-        'Camera Viewpoints': 0,
-        'Robot Initial States' : 0,
-        'Background Textures': 0,
-        'Sensor Noise': 0,
-    }
-    result_fail_dict = {
-        'Objects Layout': 0,
-        'Language Instructions': 0,
-        'Light Conditions': 0,
-        'Camera Viewpoints': 0,
-        'Robot Initial States' : 0,
-        'Background Textures': 0,
-        'Sensor Noise': 0,
-    }
+    result_success_dict = make_result_dict(cfg)
+    result_fail_dict = make_result_dict(cfg)
     total_successes = 0
     checkpoint_name = Path(cfg.pretrained_checkpoint).name
     for task_id in tqdm.tqdm(range(num_tasks)):
@@ -419,8 +675,9 @@ def eval_libero(cfg: GenerateConfig) -> float:
             processor,
             log_file,
         )
-        result_success_dict[name_to_category[task_suite.get_task_names()[task_id]]] += 1 if success else 0
-        result_fail_dict[name_to_category[task_suite.get_task_names()[task_id]]] += 1 if not success else 0
+        result_category = get_result_category(cfg, task_suite.get_task_names()[task_id], name_to_category)
+        result_success_dict[result_category] += 1 if success else 0
+        result_fail_dict[result_category] += 1 if not success else 0
         if success:
             total_successes += 1
             

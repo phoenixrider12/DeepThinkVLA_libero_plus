@@ -79,6 +79,72 @@ libero_suites = [
     "libero_90",
     "libero_10",
 ]
+
+LIBERO_PRO_BASE_TASK_MAP = {
+    "libero_spatial": [
+        "pick_up_the_black_bowl_between_the_plate_and_the_ramekin_and_place_it_on_the_plate",
+        "pick_up_the_black_bowl_next_to_the_ramekin_and_place_it_on_the_plate",
+        "pick_up_the_black_bowl_from_table_center_and_place_it_on_the_plate",
+        "pick_up_the_black_bowl_on_the_cookie_box_and_place_it_on_the_plate",
+        "pick_up_the_black_bowl_in_the_top_drawer_of_the_wooden_cabinet_and_place_it_on_the_plate",
+        "pick_up_the_black_bowl_on_the_ramekin_and_place_it_on_the_plate",
+        "pick_up_the_black_bowl_next_to_the_cookie_box_and_place_it_on_the_plate",
+        "pick_up_the_black_bowl_on_the_stove_and_place_it_on_the_plate",
+        "pick_up_the_black_bowl_next_to_the_plate_and_place_it_on_the_plate",
+        "pick_up_the_black_bowl_on_the_wooden_cabinet_and_place_it_on_the_plate",
+    ],
+    "libero_object": [
+        "pick_up_the_alphabet_soup_and_place_it_in_the_basket",
+        "pick_up_the_cream_cheese_and_place_it_in_the_basket",
+        "pick_up_the_salad_dressing_and_place_it_in_the_basket",
+        "pick_up_the_bbq_sauce_and_place_it_in_the_basket",
+        "pick_up_the_ketchup_and_place_it_in_the_basket",
+        "pick_up_the_tomato_sauce_and_place_it_in_the_basket",
+        "pick_up_the_butter_and_place_it_in_the_basket",
+        "pick_up_the_milk_and_place_it_in_the_basket",
+        "pick_up_the_chocolate_pudding_and_place_it_in_the_basket",
+        "pick_up_the_orange_juice_and_place_it_in_the_basket",
+    ],
+    "libero_goal": [
+        "open_the_middle_drawer_of_the_cabinet",
+        "put_the_bowl_on_the_stove",
+        "put_the_wine_bottle_on_top_of_the_cabinet",
+        "open_the_top_drawer_and_put_the_bowl_inside",
+        "put_the_bowl_on_top_of_the_cabinet",
+        "push_the_plate_to_the_front_of_the_stove",
+        "put_the_cream_cheese_in_the_bowl",
+        "turn_on_the_stove",
+        "put_the_bowl_on_the_plate",
+        "put_the_wine_bottle_on_the_rack",
+    ],
+    "libero_10": [
+        "LIVING_ROOM_SCENE2_put_both_the_alphabet_soup_and_the_tomato_sauce_in_the_basket",
+        "LIVING_ROOM_SCENE2_put_both_the_cream_cheese_box_and_the_butter_in_the_basket",
+        "KITCHEN_SCENE3_turn_on_the_stove_and_put_the_moka_pot_on_it",
+        "KITCHEN_SCENE4_put_the_black_bowl_in_the_bottom_drawer_of_the_cabinet_and_close_it",
+        "LIVING_ROOM_SCENE5_put_the_white_mug_on_the_left_plate_and_put_the_yellow_and_white_mug_on_the_right_plate",
+        "STUDY_SCENE1_pick_up_the_book_and_place_it_in_the_back_compartment_of_the_caddy",
+        "LIVING_ROOM_SCENE6_put_the_white_mug_on_the_plate_and_put_the_chocolate_pudding_to_the_right_of_the_plate",
+        "LIVING_ROOM_SCENE1_put_both_the_alphabet_soup_and_the_cream_cheese_box_in_the_basket",
+        "KITCHEN_SCENE8_put_both_moka_pots_on_the_stove",
+        "KITCHEN_SCENE6_put_the_yellow_and_white_mug_in_the_microwave_and_close_it",
+    ],
+}
+
+LIBERO_PRO_PERTURBATIONS = ["lan", "object", "swap", "task", "env"]
+LIBERO_PRO_BASE_SUITES = ["libero_goal", "libero_spatial", "libero_10", "libero_object"]
+LIBERO_PRO_SUITES = [
+    f"{base_suite}_{perturbation}"
+    for perturbation in LIBERO_PRO_PERTURBATIONS
+    for base_suite in LIBERO_PRO_BASE_SUITES
+]
+
+for libero_pro_suite in LIBERO_PRO_SUITES:
+    base_suite = libero_pro_suite.rsplit("_", 1)[0]
+    if base_suite in LIBERO_PRO_BASE_TASK_MAP and libero_pro_suite not in libero_task_map:
+        libero_task_map[libero_pro_suite] = LIBERO_PRO_BASE_TASK_MAP[base_suite]
+        libero_suites.append(libero_pro_suite)
+
 task_maps = {}
 max_len = 0
 for libero_suite in libero_suites:
@@ -119,8 +185,12 @@ class Benchmark(abc.ABC):
 
     def _make_benchmark(self):
         tasks = list(task_maps[self.name].values())
-        print(f"[info] using task orders {task_order_dict[self.name][self.task_order_index]}")
-        self.tasks = [tasks[i] for i in task_order_dict[self.name][self.task_order_index]]
+        if self.name in task_order_dict:
+            print(f"[info] using task orders {task_order_dict[self.name][self.task_order_index]}")
+            self.tasks = [tasks[i] for i in task_order_dict[self.name][self.task_order_index]]
+        else:
+            print(f"[info] using default task order for {self.name}")
+            self.tasks = tasks
         self.n_tasks = len(self.tasks)
 
     def get_num_tasks(self):
@@ -189,6 +259,11 @@ class Benchmark(abc.ABC):
     def get_task_init_states(self, i):
         # print("======", re.sub(r'_table_\d+$', '', self.tasks[i].init_states_file))
         # print("====init_states_path=====", self.tasks[i].init_states_file)
+        init_states_path = os.path.join(
+            get_libero_path("init_states"),
+            self.tasks[i].problem_folder,
+            self.tasks[i].init_states_file,
+        )
         if "_language_" in self.tasks[i].init_states_file:
             init_states_path = os.path.join(
                 get_libero_path("init_states"),
@@ -304,3 +379,20 @@ class LIBERO_MIX(Benchmark):
         super().__init__(task_order_index=task_order_index)
         self.name = "libero_mix"
         self._make_benchmark()
+
+
+def _register_libero_pro_benchmark_class(suite_name):
+    class_name = suite_name.upper()
+
+    def __init__(self, task_order_index=0):
+        Benchmark.__init__(self, task_order_index=task_order_index)
+        self.name = suite_name
+        self._make_benchmark()
+
+    benchmark_cls = type(class_name, (Benchmark,), {"__init__": __init__})
+    register_benchmark(benchmark_cls)
+    globals()[class_name] = benchmark_cls
+
+
+for _libero_pro_suite in LIBERO_PRO_SUITES:
+    _register_libero_pro_benchmark_class(_libero_pro_suite)

@@ -1,0 +1,1 @@
+/home/sathwik/Documents/Research/LIBERO-PRO/libero/libero/envs/objects/self_designed_object.py

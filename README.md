@@ -54,6 +54,36 @@ Or use the wrapper script:
 bash eval.sh
 ```
 
+## 🧪 Zero-shot Evaluation on LIBERO-Pro
+
+LIBERO-Pro ships perturbation suites as `bddl_files/` and `init_files/`. The dataset README says to copy those folders into a LIBERO checkout; this repo can do the same lazily by symlinking the requested suite folder on first run.
+
+```bash
+python experiments/run_libero_plus_eval.py \
+  --pretrained_checkpoint /path/to/deepthinkvla_libero_checkpoint \
+  --num_images_in_input 2 \
+  --task_suite_name libero_goal_object \
+  --libero_pro_dataset_dir ../LIBERO-PRO/LIBERO-Pro-dataset \
+  --max_new_tokens 2048 \
+  --swanlab_mode disabled
+```
+
+Supported LIBERO-Pro suite suffixes are:
+
+- `*_lan`: semantic perturbation
+- `*_object`: object perturbation
+- `*_swap`: position perturbation
+- `*_task`: task perturbation
+- `*_env`: environment perturbation, if those dataset folders are present
+
+Each suffix can be paired with `libero_goal`, `libero_spatial`, `libero_object`, or `libero_10`, for example `libero_spatial_task` or `libero_10_lan`.
+
+If you prefer to physically copy files instead of creating symlinks, pass:
+
+```bash
+--link_libero_pro_assets false
+```
+
 ### Outputs
 
 - **Logs**: `experiments/logs/`

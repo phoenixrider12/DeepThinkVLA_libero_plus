@@ -59,10 +59,35 @@ class AkitaBlackBowl(GoogleScannedObject):
     def __init__(self, name="akita_black_bowl", obj_name="akita_black_bowl"):
         super().__init__(name, obj_name)
 
+@register_object
+class YellowBowl(GoogleScannedObject):
+    def __init__(self, name="yellow_bowl", obj_name="yellow_bowl"):
+        super().__init__(name, obj_name)
+
+
+@register_object
+class BlackBowl(GoogleScannedObject):
+    def __init__(self, name="black_bowl", obj_name="black_bowl"):
+        super().__init__(name, obj_name)
+
+@register_object
+class RedAkitaBlackBowl(GoogleScannedObject):
+    def __init__(self, name="red_akita_black_bowl", obj_name="red_akita_black_bowl"):
+        super().__init__(name, obj_name)
+
+@register_object
+class BiggerAkitaBlackBowl(GoogleScannedObject):
+    def __init__(self, name="bigger_akita_black_bowl", obj_name="bigger_akita_black_bowl"):
+        super().__init__(name, obj_name)
 
 @register_object
 class Plate(GoogleScannedObject):
     def __init__(self, name="plate", obj_name="plate"):
+        super().__init__(name, obj_name)
+
+@register_object
+class YellowPlate(GoogleScannedObject):
+    def __init__(self, name="yellow_plate", obj_name="yellow_plate"):
         super().__init__(name, obj_name)
 
 
@@ -70,6 +95,13 @@ class Plate(GoogleScannedObject):
 class Basket(GoogleScannedObject):
     def __init__(self, name="basket", obj_name="basket"):
         super().__init__(name, obj_name)
+
+
+@register_object
+class RedBasket(GoogleScannedObject):
+    def __init__(self, name="red_basket", obj_name="red_basket"):
+        super().__init__(name, obj_name)
+
 
 
 @register_object
@@ -84,5 +116,14 @@ class GlazedRimPorcelainRamekin(GoogleScannedObject):
         self,
         name="glazed_rim_porcelain_ramekin",
         obj_name="glazed_rim_porcelain_ramekin",
+    ):
+        super().__init__(name, obj_name)
+
+@register_object
+class RedRamekin(GoogleScannedObject):
+    def __init__(
+        self,
+        name="red_ramekin",
+        obj_name="red_ramekin",
     ):
         super().__init__(name, obj_name)
