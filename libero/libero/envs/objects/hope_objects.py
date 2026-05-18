@@ -37,18 +37,7 @@ class AlphabetSoup(HopeBaseObject):
     def __init__(self, name="alphabet_soup", obj_name="alphabet_soup"):
         super().__init__(name, obj_name)
         self.rotation_axis = "z"
-        
-@register_object
-class BiggerAlphabetSoup(HopeBaseObject):
-    def __init__(self, name="bigger_alphabet_soup", obj_name="bigger_alphabet_soup"):
-        super().__init__(name, obj_name)
-        self.rotation_axis = "z"        
 
-@register_object
-class RedAlphabetSoup(HopeBaseObject):
-    def __init__(self, name="red_alphabet_soup", obj_name="red_alphabet_soup"):
-        super().__init__(name, obj_name)
-        self.rotation_axis = "z"
 
 @register_object
 class BbqSauce(HopeBaseObject):
@@ -57,24 +46,12 @@ class BbqSauce(HopeBaseObject):
 
 
 @register_object
-class GreenBbqSauce(HopeBaseObject):
-    def __init__(self, name="green_bbq_sauce", obj_name="green_bbq_sauce"):
-        super().__init__(name, obj_name)
-
-@register_object
 class Butter(HopeBaseObject):
     def __init__(self, name="butter", obj_name="butter"):
         super().__init__(name, obj_name)
         self.rotation = (0.0, 0.0)
         self.rotation_axis = "x"
 
-
-@register_object
-class GreenButter(HopeBaseObject):
-    def __init__(self, name="green_butter", obj_name="green_butter"):
-        super().__init__(name, obj_name)
-        self.rotation = (0.0, 0.0)
-        self.rotation_axis = "x"
 
 @register_object
 class Cherries(HopeBaseObject):
@@ -91,22 +68,10 @@ class ChocolatePudding(HopeBaseObject):
 
 
 @register_object
-class GreenChocolatePudding(HopeBaseObject):
-    def __init__(self, name="green_chocolate_pudding", obj_name="green_chocolate_pudding"):
-        super().__init__(name, obj_name)
-        self.rotation = (0.0, 0.0)
-        self.rotation_axis = "x"
-
-
-@register_object
 class Cookies(HopeBaseObject):
     def __init__(self, name="cookies", obj_name="cookies"):
         super().__init__(name, obj_name)
 
-@register_object
-class YellowCookies(HopeBaseObject):
-    def __init__(self, name="yellow_cookies", obj_name="yellow_cookies"):
-        super().__init__(name, obj_name)
 
 @register_object
 class Corn(HopeBaseObject):
@@ -123,26 +88,8 @@ class CreamCheese(HopeBaseObject):
 
 
 @register_object
-class RedCreamCheese(HopeBaseObject):
-    def __init__(self, name="red_cream_cheese", obj_name="red_cream_cheese"):
-        super().__init__(name, obj_name)
-        self.rotation = (0.0, 0.0)
-        self.rotation_axis = "x"
-
-
-@register_object
 class Ketchup(HopeBaseObject):
     def __init__(self, name="ketchup", obj_name="ketchup"):
-        super().__init__(name, obj_name)
-        self.rotation = {
-            "x": (np.pi / 2, np.pi / 2),
-            "z": (np.pi / 2, np.pi / 2),
-        }
-        self.rotation_axis = None
-
-@register_object
-class GreenKetchup(HopeBaseObject):
-    def __init__(self, name="green_ketchup", obj_name="green_ketchup"):
         super().__init__(name, obj_name)
         self.rotation = {
             "x": (np.pi / 2, np.pi / 2),
@@ -210,14 +157,6 @@ class OrangeJuice(HopeBaseObject):
             "z": (np.pi / 2, np.pi / 2),
         }
 
-@register_object
-class RedOrangeJuice(HopeBaseObject):
-    def __init__(self, name="red_orange_juice", obj_name="red_orange_juice"):
-        super().__init__(name, obj_name)
-        self.rotation = {
-            "x": (np.pi / 2, np.pi / 2),
-            "z": (np.pi / 2, np.pi / 2),
-        }
 
 # class Parmesan(HopeBaseObject):
 #     def __init__(self,
@@ -282,26 +221,8 @@ class NewSaladDressing(HopeBaseObject):
 
 
 @register_object
-class RedSaladDressing(HopeBaseObject):
-    def __init__(self, name="red_salad_dressing", obj_name="red_salad_dressing"):
-        super().__init__(name, obj_name)
-        self.rotation = {
-            "x": (np.pi / 2, np.pi / 2),
-            "z": (np.pi / 2, np.pi / 2),
-        }
-        self.rotation_axis = None
-
-
-@register_object
 class TomatoSauce(HopeBaseObject):
     def __init__(self, name="tomato_sauce", obj_name="tomato_sauce"):
-        super().__init__(name, obj_name)
-        self.rotation_axis = "z"
-
-
-@register_object
-class YellowTomatoSauce(HopeBaseObject):
-    def __init__(self, name="yellow_tomato_sauce", obj_name="yellow_tomato_sauce"):
         super().__init__(name, obj_name)
         self.rotation_axis = "z"
 
@@ -317,43 +238,3 @@ class YellowTomatoSauce(HopeBaseObject):
 #                  name="yogurt",
 #                  obj_name="yogurt"):
 #         super().__init__(name, obj_name)
-@register_object
-class BlueKetchup(HopeBaseObject):
-    def __init__(self, name="blue_ketchup", obj_name="blue_ketchup"):
-        super().__init__(name, obj_name)
-        self.rotation_axis = "z"
-        
-@register_object
-class BiggerMilk(HopeBaseObject):
-    def __init__(self, name="bigger_milk", obj_name="bigger_milk"):
-        super().__init__(name, obj_name)
-        self.rotation_axis = "z"
-
-
-@register_object
-class YellowMilk(HopeBaseObject):
-    def __init__(self, name="yellow_milk", obj_name="yellow_milk"):
-        super().__init__(name, obj_name)
-        self.rotation_axis = "z"
-
-@register_object
-class RedAlphabetSoup(HopeBaseObject):
-    def __init__(self, name="red_alphabet_soup", obj_name="red_alphabet_soup"):
-        super().__init__(name, obj_name)
-        self.rotation_axis = "z"
-@register_object
-class RedAlphabetSoup(HopeBaseObject):
-    def __init__(self, name="red_alphabet_soup", obj_name="red_alphabet_soup"):
-        super().__init__(name, obj_name)
-        self.rotation_axis = "z"
-@register_object
-class RedAlphabetSoup(HopeBaseObject):
-    def __init__(self, name="red_alphabet_soup", obj_name="red_alphabet_soup"):
-        super().__init__(name, obj_name)
-        self.rotation_axis = "z"
-@register_object
-class RedAlphabetSoup(HopeBaseObject):
-    def __init__(self, name="red_alphabet_soup", obj_name="red_alphabet_soup"):
-        super().__init__(name, obj_name)
-        self.rotation_axis = "z"
-

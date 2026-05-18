@@ -3,7 +3,7 @@
 import json
 import os
 import time
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -17,7 +17,7 @@ from sft.constants import ACTION_PROPRIO_NORMALIZATION_TYPE, ACTION_MASK, NUM_AC
 
 # Initialize important constants
 THINK_PREFIX = "First output the thinking process in <think></think> tags and then output the final action in <action></action>."
-DEVICE = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+DEVICE = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
 IMAGE_SIZE = 224  # Standard image size expected by the model
 
 # Configure NumPy print settings
@@ -263,6 +263,120 @@ def get_vla_action(
 
     # Return action chunk as list of actions
     return [actions[i] for i in range(len(actions))], cot_text
+
+
+def _strip_reasoning_tags(reasoning: Optional[str]) -> str:
+    if reasoning is None:
+        return ""
+
+    cleaned = reasoning.strip()
+    for token in ("<think>", "</think>", "<action>", "</action>"):
+        cleaned = cleaned.replace(token, "")
+    return cleaned.strip()
+
+
+def get_vla_action_with_steered_reasoning(
+    cfg: Any,
+    vla: torch.nn.Module,
+    unomrmalize_action,
+    processor: Any,
+    obs: Dict[str, Any],
+    task_label: str,
+    reasoning_steering_fn: Callable[[np.ndarray, str, Optional[str]], str],
+) -> Tuple[List[np.ndarray], str]:
+    """Generate CoT, steer it, then decode actions conditioned on steered CoT."""
+    if "cot" not in cfg.pretrained_checkpoint:
+        raise ValueError("Reasoning steering requires a CoT checkpoint.")
+
+    with torch.inference_mode():
+        image = (
+            [
+                prepare_image_for_vla(obs["full_image"]),
+                prepare_image_for_vla(obs["wrist_image"]),
+            ]
+            if cfg.num_images_in_input > 1
+            else [prepare_image_for_vla(obs["full_image"])]
+        )
+
+        prompt = processor.tokenizer.additional_special_tokens[0] * len(image) + THINK_PREFIX + f"Task: {task_label.lower()};"
+        inputs = processor(text=[prompt], images=image, return_tensors="pt").to(DEVICE, dtype=torch.bfloat16)
+
+        kwargs = {
+            "max_new_tokens": cfg.max_new_tokens,
+            "do_sample": False,
+            "pad_token_id": processor.tokenizer.pad_token_id,
+            "bos_token_id": processor.tokenizer.bos_token_id,
+            "eos_token_id": None,
+            "use_cache": True,
+            "num_beams": 1,
+            "temperature": None,
+            "top_p": None,
+            "top_k": None,
+        }
+        generation_config = GenerationConfig(**kwargs)
+
+        input_cot_ids = vla.generate(
+            input_ids=inputs["input_ids"],
+            pixel_values=inputs["pixel_values"],
+            attention_mask=inputs["attention_mask"],
+            generation_config=generation_config,
+            stopping_criteria=vla.stopping,
+            logits_processor=vla.proc,
+        )
+        original_reasoning = _strip_reasoning_tags(
+            processor.tokenizer.decode(input_cot_ids[0, inputs["input_ids"].shape[-1]:-1])
+        )
+        steered_reasoning = reasoning_steering_fn(obs["full_image"], task_label, original_reasoning)
+        if not isinstance(steered_reasoning, str):
+            raise TypeError("reasoning_steering_fn must return a string.")
+        steered_reasoning = _strip_reasoning_tags(steered_reasoning)
+
+        steered_reasoning_ids = processor.tokenizer(
+            steered_reasoning,
+            add_special_tokens=False,
+            return_tensors="pt",
+        )["input_ids"].to(inputs["input_ids"].device)
+        steered_cot_ids = torch.cat(
+            [
+                torch.tensor([[vla.config.think_start_token_index]], device=inputs["input_ids"].device),
+                steered_reasoning_ids,
+                torch.tensor(
+                    [[vla.config.think_end_token_index, vla.config.action_start_token_index]],
+                    device=inputs["input_ids"].device,
+                ),
+            ],
+            dim=-1,
+        )
+
+        input_cot_ids = torch.cat([inputs["input_ids"], steered_cot_ids], dim=-1)
+        attention_mask = torch.ones_like(input_cot_ids, device=input_cot_ids.device)
+
+        logits, action_start_idx = vla.prompt_cot_predict_action(
+            input_cot_ids=input_cot_ids,
+            pixel_values=inputs["pixel_values"],
+            attention_mask=attention_mask,
+        )
+        start_indices = action_start_idx.unsqueeze(1)
+        position_offsets = torch.arange(ACTION_DIM * NUM_ACTIONS_CHUNK, device=logits.device).unsqueeze(0)
+        seq_indices = start_indices + position_offsets
+
+        predicted_action_token_ids = (vla.config.action_token_end_idx - vla.config.action_token_begin_idx) - (
+            logits[
+                torch.arange(logits.shape[0], device=logits.device).unsqueeze(-1),
+                seq_indices,
+                vla.config.action_token_begin_idx:vla.config.action_token_end_idx + 1,
+            ]
+            .argmax(dim=-1)
+            .cpu()
+            .numpy()
+        )
+        discretized_actions = np.clip(predicted_action_token_ids, a_min=0, a_max=vla.bin_centers.shape[0] - 1)
+        normalized_actions = vla.bin_centers[discretized_actions]
+        normalized_actions = normalized_actions.reshape(NUM_ACTIONS_CHUNK, ACTION_DIM)
+
+        actions = unomrmalize_action(torch.from_numpy(normalized_actions)).numpy()
+
+    return [actions[i] for i in range(len(actions))], steered_reasoning
 
 def get_vla_action_mask_cot(
     cfg: Any,

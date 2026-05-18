@@ -16,3 +16,6 @@ logs_mask_cot_random/
 logs_robotwin/
 eval_robotwin_result/
 yinchenghust/
+rollouts_base/
+*.zip
+**assets/

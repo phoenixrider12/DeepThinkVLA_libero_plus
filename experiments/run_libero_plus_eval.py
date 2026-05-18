@@ -6,12 +6,8 @@ Evaluates a trained policy in a LIBERO simulation benchmark task suite.
 import sys
 sys.path.append("./")
 import json
-import importlib
-import inspect
 import logging
 import os
-import pkgutil
-import shutil
 import sys
 from collections import deque
 from dataclasses import dataclass
@@ -23,7 +19,6 @@ import draccus
 import numpy as np
 import tqdm
 from libero.libero import benchmark
-from libero.libero import get_libero_path
 
 # import swanlab
 from transformers import AutoProcessor
@@ -43,15 +38,27 @@ from experiments.deepthinkvla_utils import (
     resize_image_for_policy,
     get_vla,
     get_vla_action,
+    get_vla_action_with_steered_reasoning,
     get_vla_action_mask_cot,
     get_vla_action_mask_cot_random,
     compose_with_sidepanel,
     binarize_gripper_action
 )
+from experiments.reasoning_steering import steer_reasoning
 from sft.constants import NUM_ACTIONS_CHUNK
 
 
 DATE_TIME = time.strftime("%Y_%m_%d-%H_%M_%S")
+def expand_bare_bool_flag(flag: str) -> None:
+    """Let draccus bool fields be used as bare CLI flags."""
+    if flag not in sys.argv:
+        return
+
+    flag_index = sys.argv.index(flag)
+    has_value = flag_index + 1 < len(sys.argv) and not sys.argv[flag_index + 1].startswith("--")
+    if not has_value:
+        sys.argv.insert(flag_index + 1, "True")
+
 
 # Define task suite constants
 class TaskSuite(str, Enum):
@@ -61,30 +68,6 @@ class TaskSuite(str, Enum):
     LIBERO_10 = "libero_10"
     LIBERO_90 = "libero_90"
     LIBERO_MIX = 'libero_mix'
-    LIBERO_GOAL_TEMP = "libero_goal_temp"
-    LIBERO_SPATIAL_TEMP = "libero_spatial_temp"
-    LIBERO_10_TEMP = "libero_10_temp"
-    LIBERO_OBJECT_TEMP = "libero_object_temp"
-    LIBERO_GOAL_LAN = "libero_goal_lan"
-    LIBERO_SPATIAL_LAN = "libero_spatial_lan"
-    LIBERO_10_LAN = "libero_10_lan"
-    LIBERO_OBJECT_LAN = "libero_object_lan"
-    LIBERO_GOAL_OBJECT = "libero_goal_object"
-    LIBERO_SPATIAL_OBJECT = "libero_spatial_object"
-    LIBERO_10_OBJECT = "libero_10_object"
-    LIBERO_OBJECT_OBJECT = "libero_object_object"
-    LIBERO_GOAL_SWAP = "libero_goal_swap"
-    LIBERO_SPATIAL_SWAP = "libero_spatial_swap"
-    LIBERO_10_SWAP = "libero_10_swap"
-    LIBERO_OBJECT_SWAP = "libero_object_swap"
-    LIBERO_GOAL_TASK = "libero_goal_task"
-    LIBERO_SPATIAL_TASK = "libero_spatial_task"
-    LIBERO_10_TASK = "libero_10_task"
-    LIBERO_OBJECT_TASK = "libero_object_task"
-    LIBERO_GOAL_ENV = "libero_goal_env"
-    LIBERO_SPATIAL_ENV = "libero_spatial_env"
-    LIBERO_10_ENV = "libero_10_env"
-    LIBERO_OBJECT_ENV = "libero_object_env"
 
 
 # Define max steps for each task suite
@@ -94,47 +77,7 @@ TASK_MAX_STEPS = {
     TaskSuite.LIBERO_GOAL: 300,  # longest training demo has 270 steps
     TaskSuite.LIBERO_10: 620,  # longest training demo has 620 steps
     TaskSuite.LIBERO_90: 400,  # longest training demo has 373 steps
-    TaskSuite.LIBERO_GOAL_TEMP: 300,
-    TaskSuite.LIBERO_SPATIAL_TEMP: 220,
-    TaskSuite.LIBERO_10_TEMP: 520,
-    TaskSuite.LIBERO_OBJECT_TEMP: 280,
-    TaskSuite.LIBERO_GOAL_LAN: 300,
-    TaskSuite.LIBERO_SPATIAL_LAN: 220,
-    TaskSuite.LIBERO_10_LAN: 520,
-    TaskSuite.LIBERO_OBJECT_LAN: 280,
-    TaskSuite.LIBERO_GOAL_OBJECT: 300,
-    TaskSuite.LIBERO_SPATIAL_OBJECT: 220,
-    TaskSuite.LIBERO_10_OBJECT: 520,
-    TaskSuite.LIBERO_OBJECT_OBJECT: 280,
-    TaskSuite.LIBERO_GOAL_SWAP: 300,
-    TaskSuite.LIBERO_SPATIAL_SWAP: 220,
-    TaskSuite.LIBERO_10_SWAP: 520,
-    TaskSuite.LIBERO_OBJECT_SWAP: 280,
-    TaskSuite.LIBERO_GOAL_TASK: 300,
-    TaskSuite.LIBERO_SPATIAL_TASK: 220,
-    TaskSuite.LIBERO_10_TASK: 520,
-    TaskSuite.LIBERO_OBJECT_TASK: 280,
-    TaskSuite.LIBERO_GOAL_ENV: 300,
-    TaskSuite.LIBERO_SPATIAL_ENV: 220,
-    TaskSuite.LIBERO_10_ENV: 520,
-    TaskSuite.LIBERO_OBJECT_ENV: 280,
 }
-
-LIBERO_PRO_PERTURBATION_CATEGORIES = {
-    "lan": "Semantic Perturbation",
-    "object": "Object Perturbation",
-    "swap": "Position Perturbation",
-    "task": "Task Perturbation",
-    "env": "Environment Perturbation",
-}
-
-LIBERO_PRO_SUITE_NAMES = {
-    f"{base_suite}_{perturbation}"
-    for perturbation in LIBERO_PRO_PERTURBATION_CATEGORIES
-    for base_suite in ["libero_goal", "libero_spatial", "libero_10", "libero_object"]
-}
-
-LIBERO_PRO_RESULT_CATEGORIES = list(LIBERO_PRO_PERTURBATION_CATEGORIES.values())
 
 
 # Set up logging
@@ -167,10 +110,12 @@ class GenerateConfig:
     # LIBERO environment-specific parameters
     #################################################################################################################
     task_suite_name: str = TaskSuite.LIBERO_OBJECT     # Task suite
+    task_id: Optional[int] = None                     # If set, evaluate only this task index in the suite
+    task_category: Optional[str] = None               # If set, evaluate only tasks matching this category
+    skip_task_ids: Optional[str] = None               # Comma-separated task indices to skip, e.g. "0,3,7"
+    skip_task_name_contains: Optional[str] = None     # Pipe-separated text patterns for task names to skip
     num_steps_wait: int = 10                         # Number of steps to wait for objects to stabilize in sim
     initial_states_path: str = "DEFAULT"             # "DEFAULT", or path to initial states JSON file
-    libero_pro_dataset_dir: Optional[str] = None      # Path to LIBERO-Pro-dataset with bddl_files/ and init_files/
-    link_libero_pro_assets: bool = True               # Symlink Pro bddl/init folders into this LIBERO checkout if missing
     env_img_res: int = 256                           # Resolution for environment images (not policy input resolution)
 
     #################################################################################################################
@@ -186,6 +131,11 @@ class GenerateConfig:
     seed: int = 429                                    # Random Seed (for reproducibility)
 
     panel_width_px: int = 812                         # Width of side panel for displaying CoT text
+
+    #################################################################################################################
+    # Reasoning steering / override
+    #################################################################################################################
+    use_reasoning_steering: bool = False             # Call steer_reasoning(image, prompt, current_reasoning)
 
     # fmt: on
 
@@ -209,210 +159,10 @@ def validate_config(cfg: GenerateConfig) -> None:
     assert cfg.pretrained_checkpoint is not None, "pretrained_checkpoint must not be None!"
 
     # Validate task suite
-    benchmark_dict = benchmark.get_benchmark_dict()
-    assert cfg.task_suite_name in benchmark_dict, (
-        f"Invalid task suite: {cfg.task_suite_name}. "
-        f"Available suites include: {', '.join(sorted(benchmark_dict.keys()))}"
-    )
-
-
-def is_libero_pro_suite(task_suite_name: str) -> bool:
-    """Return True for LIBERO-Pro perturbation suites."""
-    return task_suite_name in LIBERO_PRO_SUITE_NAMES
-
-
-def get_libero_pro_category(task_suite_name: str) -> Optional[str]:
-    """Map a LIBERO-Pro suite suffix to the perturbation category from the dataset card."""
-    return LIBERO_PRO_PERTURBATION_CATEGORIES.get(task_suite_name.rsplit("_", 1)[-1])
-
-
-def ensure_libero_pro_assets(cfg: GenerateConfig, log_file=None) -> None:
-    """Make LIBERO-Pro bddl/init files visible to this vendored LIBERO checkout."""
-    if not is_libero_pro_suite(cfg.task_suite_name):
-        return
-
-    bddl_suite_dir = Path(get_libero_path("bddl_files")) / cfg.task_suite_name
-    init_suite_dir = Path(get_libero_path("init_states")) / cfg.task_suite_name
-
-    if bddl_suite_dir.exists() and init_suite_dir.exists():
-        if cfg.libero_pro_dataset_dir is not None:
-            dataset_dir = Path(cfg.libero_pro_dataset_dir).expanduser().resolve()
-            ensure_libero_pro_framework_assets(dataset_dir, cfg.link_libero_pro_assets, log_file)
-        return
-
-    if cfg.libero_pro_dataset_dir is None:
-        missing = []
-        if not bddl_suite_dir.exists():
-            missing.append(str(bddl_suite_dir))
-        if not init_suite_dir.exists():
-            missing.append(str(init_suite_dir))
-        raise FileNotFoundError(
-            "LIBERO-Pro assets are missing. Copy/symlink the dataset-card folders into this LIBERO checkout "
-            f"or pass --libero_pro_dataset_dir /path/to/LIBERO-Pro-dataset. Missing: {missing}"
-        )
-
-    dataset_dir = Path(cfg.libero_pro_dataset_dir).expanduser().resolve()
-    source_dirs = {
-        "bddl_files": dataset_dir / "bddl_files" / cfg.task_suite_name,
-        "init_files": dataset_dir / "init_files" / cfg.task_suite_name,
-    }
-    target_dirs = {
-        "bddl_files": bddl_suite_dir,
-        "init_files": init_suite_dir,
-    }
-
-    for asset_kind, source_dir in source_dirs.items():
-        if not source_dir.exists():
-            raise FileNotFoundError(f"Missing LIBERO-Pro {asset_kind} suite folder: {source_dir}")
-
-        target_dir = target_dirs[asset_kind]
-        if target_dir.exists():
-            continue
-
-        target_dir.parent.mkdir(parents=True, exist_ok=True)
-        if cfg.link_libero_pro_assets:
-            os.symlink(source_dir, target_dir, target_is_directory=True)
-            log_message(f"Linked LIBERO-Pro {asset_kind}: {target_dir} -> {source_dir}", log_file)
-        else:
-            shutil.copytree(source_dir, target_dir)
-            log_message(f"Copied LIBERO-Pro {asset_kind}: {source_dir} -> {target_dir}", log_file)
-
-    ensure_libero_pro_framework_assets(dataset_dir, cfg.link_libero_pro_assets, log_file)
-
-
-def ensure_libero_pro_framework_assets(
-    dataset_dir: Path,
-    use_symlinks: bool,
-    log_file=None,
-) -> None:
-    """Mirror LIBERO-Pro framework assets referenced by Pro BDDL files."""
-    libero_pro_repo_dir = dataset_dir.parent
-    source_assets_dir = libero_pro_repo_dir / "libero" / "libero" / "assets"
-    target_assets_dir = Path(get_libero_path("assets"))
-
-    if not source_assets_dir.exists():
-        log_message(
-            f"LIBERO-Pro framework assets not found at {source_assets_dir}; "
-            "skipping optional asset mirroring.",
-            log_file,
-        )
-        return
-
-    for source_path in source_assets_dir.rglob("*"):
-        if source_path.is_dir():
-            continue
-
-        target_path = target_assets_dir / source_path.relative_to(source_assets_dir)
-        if target_path.exists():
-            continue
-
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-        if use_symlinks:
-            os.symlink(source_path, target_path)
-        else:
-            shutil.copy2(source_path, target_path)
-
-    log_message(f"Checked LIBERO-Pro framework assets from {source_assets_dir}", log_file)
-    ensure_libero_pro_object_registry(libero_pro_repo_dir, use_symlinks, log_file)
-
-
-def ensure_libero_pro_object_registry(
-    libero_pro_repo_dir: Path,
-    use_symlinks: bool,
-    log_file=None,
-) -> None:
-    """Mirror LIBERO-Pro object registry code for Pro-only fixture categories."""
-    source_objects_dir = libero_pro_repo_dir / "libero" / "libero" / "envs" / "objects"
-    target_objects_dir = Path(__file__).resolve().parents[1] / "libero" / "libero" / "envs" / "objects"
-
-    if not source_objects_dir.exists():
-        log_message(
-            f"LIBERO-Pro object registry not found at {source_objects_dir}; "
-            "skipping optional object-code mirroring.",
-            log_file,
-        )
-        return
-
-    for source_path in source_objects_dir.rglob("*.py"):
-        target_path = target_objects_dir / source_path.relative_to(source_objects_dir)
-
-        if target_path.exists() and target_path.read_bytes() == source_path.read_bytes():
-            continue
-
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-        if target_path.exists() or not use_symlinks:
-            shutil.copy2(source_path, target_path)
-        else:
-            os.symlink(source_path, target_path)
-
-    importlib.invalidate_caches()
-    objects_module = sys.modules.get("libero.libero.envs.objects")
-    if objects_module is not None:
-        importlib.reload(objects_module)
-
-    register_libero_pro_object_aliases(log_file)
-    log_message(f"Checked LIBERO-Pro object registry from {source_objects_dir}", log_file)
-
-
-def _normalize_registry_name(name: str) -> str:
-    return name.lower().replace("_", "")
-
-
-def register_libero_pro_object_aliases(log_file=None) -> None:
-    """Register Pro object names that older LIBERO registries may omit."""
-    objects_module = importlib.import_module("libero.libero.envs.objects")
-    objects_dict = getattr(objects_module, "OBJECTS_DICT", None)
-    if not isinstance(objects_dict, dict):
-        return
-
-    if "yellow_cabinet" in objects_dict:
-        return
-
-    for _, module_name, _ in pkgutil.walk_packages(objects_module.__path__, objects_module.__name__ + "."):
-        module = importlib.import_module(module_name)
-        for attr_name, attr_value in inspect.getmembers(module, inspect.isclass):
-            normalized_name = _normalize_registry_name(attr_name)
-            if normalized_name in {"yellowcabinet", "yellowcabinetobject"}:
-                objects_dict["yellow_cabinet"] = attr_value
-                log_message("Registered LIBERO-Pro object alias: yellow_cabinet", log_file)
-                return
-
-    for fallback_name in ["wooden_cabinet", "cabinet"]:
-        if fallback_name in objects_dict:
-            objects_dict["yellow_cabinet"] = objects_dict[fallback_name]
-            log_message(
-                f"Registered LIBERO-Pro object fallback: yellow_cabinet -> {fallback_name}",
-                log_file,
-            )
-            return
-
-
-def make_result_dict(cfg: GenerateConfig) -> dict:
-    """Create a result counter matching LIBERO+ or LIBERO-Pro reporting."""
-    if is_libero_pro_suite(cfg.task_suite_name):
-        return {category: 0 for category in LIBERO_PRO_RESULT_CATEGORIES}
-    return {
-        'Objects Layout': 0,
-        'Language Instructions': 0,
-        'Light Conditions': 0,
-        'Camera Viewpoints': 0,
-        'Robot Initial States' : 0,
-        'Background Textures': 0,
-        'Sensor Noise': 0,
-    }
-
-
-def get_result_category(cfg: GenerateConfig, task_name: str, name_to_category: dict) -> str:
-    """Get the reporting bucket for one evaluated task."""
-    if is_libero_pro_suite(cfg.task_suite_name):
-        category = get_libero_pro_category(cfg.task_suite_name)
-        if category is None:
-            raise KeyError(f"No LIBERO-Pro category mapping for suite: {cfg.task_suite_name}")
-        return category
-    return name_to_category[task_name]
-
-
-
+    assert cfg.task_suite_name in [suite.value for suite in TaskSuite], f"Invalid task suite: {cfg.task_suite_name}"
+    assert not (
+        cfg.task_id is not None and cfg.task_category is not None
+    ), "Set only one of task_id or task_category."
 
 def setup_logging(cfg: GenerateConfig):
     """Set up logging to file and optionally to wandb."""
@@ -449,6 +199,109 @@ def log_message(message: str, log_file=None):
     if log_file:
         log_file.write(message + "\n")
         log_file.flush()
+
+
+def parse_task_id_list(task_ids: Optional[str]) -> set[int]:
+    if task_ids is None or task_ids.strip() == "":
+        return set()
+    return {int(task_id.strip()) for task_id in task_ids.split(",") if task_id.strip()}
+
+
+def normalize_task_text(text: str) -> str:
+    return " ".join(text.replace("_", " ").replace("-", " ").lower().split())
+
+
+def text_matches(needle: str, haystack: str) -> bool:
+    normalized_needle = normalize_task_text(needle)
+    normalized_haystack = normalize_task_text(haystack)
+    return normalized_needle in normalized_haystack or normalized_haystack in normalized_needle
+
+
+def get_task_search_text(task_suite, task_id: int) -> str:
+    task = task_suite.get_task(task_id)
+    candidates = [task_suite.get_task_names()[task_id]]
+    for attr in ("language", "description", "name"):
+        value = getattr(task, attr, None)
+        if isinstance(value, str):
+            candidates.append(value)
+    return normalize_task_text(" ".join(candidates))
+
+
+def parse_task_name_patterns(patterns: Optional[str]) -> list[str]:
+    if patterns is None or patterns.strip() == "":
+        return []
+    return [
+        normalize_task_text(pattern)
+        for pattern in patterns.split("|")
+        if pattern.strip()
+    ]
+
+
+def load_task_classification():
+    classification_path = Path("libero/libero/benchmark/task_classification.json")
+    if not classification_path.exists():
+        return None
+    with open(classification_path, "r") as f:
+        return json.load(f)
+
+
+def collect_texts(node) -> list[str]:
+    texts = []
+    if isinstance(node, str):
+        texts.append(node)
+    elif isinstance(node, list):
+        for item in node:
+            texts.extend(collect_texts(item))
+    elif isinstance(node, dict):
+        for key, value in node.items():
+            if isinstance(key, str):
+                texts.append(key)
+            texts.extend(collect_texts(value))
+    return texts
+
+
+def classification_contains_task(node, task_text: str) -> bool:
+    return any(text_matches(text, task_text) for text in collect_texts(node))
+
+
+def task_matches_category(task_classification, task_text: str, category: str) -> bool:
+    """Match task/category in common classification JSON layouts."""
+    if task_classification is None:
+        return False
+
+    def visit(node, category_seen: bool = False, task_seen: bool = False) -> bool:
+        if isinstance(node, str):
+            return (category_seen or text_matches(category, node)) and (task_seen or text_matches(task_text, node))
+
+        if isinstance(node, list):
+            node_texts = collect_texts(node)
+            node_has_category = category_seen or any(text_matches(category, text) for text in node_texts)
+            node_has_task = task_seen or any(text_matches(text, task_text) for text in node_texts)
+            if node_has_category and node_has_task:
+                return True
+            return any(visit(item, node_has_category, node_has_task) for item in node)
+
+        if isinstance(node, dict):
+            for key, value in node.items():
+                key_has_category = isinstance(key, str) and text_matches(category, key)
+                key_has_task = isinstance(key, str) and text_matches(key, task_text)
+                next_category_seen = category_seen or key_has_category
+                next_task_seen = task_seen or key_has_task
+
+                # category -> subtree containing task(s)
+                if next_category_seen and classification_contains_task(value, task_text):
+                    return True
+
+                # task -> subtree containing category/category metadata
+                if next_task_seen and any(text_matches(category, text) for text in collect_texts(value)):
+                    return True
+
+                if visit(value, next_category_seen, next_task_seen):
+                    return True
+
+        return False
+
+    return visit(task_classification)
 
 
 def load_initial_states(cfg: GenerateConfig, task_suite, task_id: int, log_file=None):
@@ -539,14 +392,25 @@ def run_episode(
                 with torch.no_grad():
                     # mask_cot: get_vla_action_mask_cot
                     # mask_cot_random: get_vla_action_mask_cot_random
-                    actions, cot_text = get_vla_action(
-                        cfg=cfg,
-                        vla=model,
-                        unomrmalize_action = unomrmalize_action,
-                        processor=processor,
-                        obs=observation,
-                        task_label=task_description,
-                    )
+                    if cfg.use_reasoning_steering:
+                        actions, cot_text = get_vla_action_with_steered_reasoning(
+                            cfg=cfg,
+                            vla=model,
+                            unomrmalize_action=unomrmalize_action,
+                            processor=processor,
+                            obs=observation,
+                            task_label=task_description,
+                            reasoning_steering_fn=steer_reasoning,
+                        )
+                    else:
+                        actions, cot_text = get_vla_action(
+                            cfg=cfg,
+                            vla=model,
+                            unomrmalize_action = unomrmalize_action,
+                            processor=processor,
+                            obs=observation,
+                            task_label=task_description,
+                        )
                 action_queue.extend(actions)
                 cot_replay.append(cot_text)
 
@@ -638,6 +502,7 @@ def eval_libero(cfg: GenerateConfig) -> float:
 
     with open("name_to_category.json", "r") as f:
         name_to_category =  json.load(f)
+    task_classification = load_task_classification()
 
     ##########################################################################################
     # Initialize model and components
@@ -649,21 +514,88 @@ def eval_libero(cfg: GenerateConfig) -> float:
     ##########################################################################################
     # Setup logging
     log_file, local_log_filepath, run_id = setup_logging(cfg)
-    ensure_libero_pro_assets(cfg, log_file)
+    if cfg.use_reasoning_steering:
+        log_message(
+            "Reasoning steering enabled. Actions will be decoded from the steered reasoning trace.",
+            log_file,
+        )
 
     # Initialize LIBERO task suite
     benchmark_dict = benchmark.get_benchmark_dict()
     task_suite = benchmark_dict[cfg.task_suite_name]()
     num_tasks = min(task_suite.n_tasks, 500)
 
-    log_message(f"Task suite: {cfg.task_suite_name}", log_file)
-
     # Start evaluation
-    result_success_dict = make_result_dict(cfg)
-    result_fail_dict = make_result_dict(cfg)
+    result_success_dict = {
+        'Objects Layout': 0,
+        'Language Instructions': 0,
+        'Light Conditions': 0,
+        'Camera Viewpoints': 0,
+        'Robot Initial States' : 0,
+        'Background Textures': 0,
+        'Sensor Noise': 0,
+    }
+    result_fail_dict = {
+        'Objects Layout': 0,
+        'Language Instructions': 0,
+        'Light Conditions': 0,
+        'Camera Viewpoints': 0,
+        'Robot Initial States' : 0,
+        'Background Textures': 0,
+        'Sensor Noise': 0,
+    }
+    if cfg.task_category is not None:
+        assert cfg.task_category in result_success_dict, (
+            f"Invalid task_category {cfg.task_category!r}; expected one of {list(result_success_dict.keys())}"
+        )
+
+    if cfg.task_id is not None:
+        assert 0 <= cfg.task_id < num_tasks, f"Invalid task_id {cfg.task_id}; expected 0 <= task_id < {num_tasks}"
+        task_ids = [cfg.task_id]
+    elif cfg.task_category is not None:
+        assert task_classification is not None, "task_category requires libero/libero/benchmark/task_classification.json"
+        task_ids = [
+            task_id
+            for task_id in range(num_tasks)
+            if task_matches_category(
+                task_classification,
+                get_task_search_text(task_suite, task_id),
+                cfg.task_category,
+            )
+        ]
+        assert len(task_ids) > 0, f"No tasks found for category {cfg.task_category!r}"
+    else:
+        task_ids = range(num_tasks)
+
+    skipped_task_ids = parse_task_id_list(cfg.skip_task_ids)
+    if skipped_task_ids:
+        invalid_skips = [task_id for task_id in skipped_task_ids if task_id < 0 or task_id >= num_tasks]
+        assert not invalid_skips, f"Invalid skip_task_ids {invalid_skips}; expected 0 <= task_id < {num_tasks}"
+        task_ids = [task_id for task_id in task_ids if task_id not in skipped_task_ids]
+        assert len(task_ids) > 0, "No tasks left after applying skip_task_ids."
+
+    if cfg.skip_task_name_contains is not None:
+        skip_texts = parse_task_name_patterns(cfg.skip_task_name_contains)
+        task_ids = [
+            task_id
+            for task_id in task_ids
+            if not any(skip_text in get_task_search_text(task_suite, task_id) for skip_text in skip_texts)
+        ]
+        assert len(task_ids) > 0, "No tasks left after applying skip_task_name_contains."
+
+    log_message(f"Task suite: {cfg.task_suite_name}", log_file)
+    if cfg.task_id is not None:
+        log_message(f"Evaluating only task_id: {cfg.task_id}", log_file)
+    if cfg.task_category is not None:
+        log_message(f"Evaluating only task_category: {cfg.task_category} ({len(task_ids)} tasks)", log_file)
+    if skipped_task_ids:
+        log_message(f"Skipping task_ids: {sorted(skipped_task_ids)}", log_file)
+    if cfg.skip_task_name_contains is not None:
+        log_message(f"Skipping task names containing any of: {parse_task_name_patterns(cfg.skip_task_name_contains)}", log_file)
+
     total_successes = 0
     checkpoint_name = Path(cfg.pretrained_checkpoint).name
-    for task_id in tqdm.tqdm(range(num_tasks)):
+    for task_id in tqdm.tqdm(task_ids):
         # task_id = 0
         success = run_task(
             cfg,
@@ -675,9 +607,8 @@ def eval_libero(cfg: GenerateConfig) -> float:
             processor,
             log_file,
         )
-        result_category = get_result_category(cfg, task_suite.get_task_names()[task_id], name_to_category)
-        result_success_dict[result_category] += 1 if success else 0
-        result_fail_dict[result_category] += 1 if not success else 0
+        result_success_dict[name_to_category[task_suite.get_task_names()[task_id]]] += 1 if success else 0
+        result_fail_dict[name_to_category[task_suite.get_task_names()[task_id]]] += 1 if not success else 0
         if success:
             total_successes += 1
             
@@ -688,11 +619,12 @@ def eval_libero(cfg: GenerateConfig) -> float:
                 json.dump(result_fail_dict, f, indent=4)
 
     # Calculate final success rate
-    final_success_rate = float(total_successes) / float(num_tasks)
+    num_eval_tasks = len(task_ids) if isinstance(task_ids, list) else num_tasks
+    final_success_rate = float(total_successes) / float(num_eval_tasks)
 
     # Log final results
     log_message("Final results:", log_file)
-    log_message(f"Total episodes: {num_tasks}", log_file)
+    log_message(f"Total episodes: {num_eval_tasks}", log_file)
     log_message(f"Total successes: {total_successes}", log_file)
     log_message(f"Overall success rate: {final_success_rate:.4f} ({final_success_rate * 100:.1f}%)", log_file)
 
@@ -708,4 +640,5 @@ def eval_libero(cfg: GenerateConfig) -> float:
 
 
 if __name__ == "__main__":
+    expand_bare_bool_flag("--use_reasoning_steering")
     eval_libero()
