@@ -41,7 +41,8 @@ from experiments.deepthinkvla_utils import (
     get_vla_action_mask_cot,
     get_vla_action_mask_cot_random,
     compose_with_sidepanel,
-    binarize_gripper_action
+    binarize_gripper_action,
+    prepare_image_for_vla
 )
 from sft.constants import NUM_ACTIONS_CHUNK
 
@@ -115,6 +116,10 @@ class GenerateConfig:
     seed: int = 429                                    # Random Seed (for reproducibility)
 
     panel_width_px: int = 812                         # Width of side panel for displaying CoT text
+
+    save_traj: bool = False                          # Whether to save trajectories in the new format
+    save_traj_dir: str = "./experiments/saved_trajectories" # Directory to save trajectories
+    perturbation_type: Optional[str] = None          # If specified, filter and only run evaluation for this perturbation type
 
     # fmt: on
 
@@ -229,6 +234,7 @@ def run_episode(
     initial_state=None,
     save_video=False,
     log_file=None,
+    task_id: Optional[int] = None,
 ):
     """Run a single episode in the environment."""
     # Reset environment
@@ -247,6 +253,17 @@ def run_episode(
     replay_images = []
     cot_replay = []
     max_steps = TASK_MAX_STEPS[cfg.task_suite_name]
+
+    # Initialize trajectory saving format if enabled
+    traj_subfolder = None
+    traj_entries = []
+    if getattr(cfg, "save_traj", False):
+        processed_task_description = task_description.lower().replace(" ", "_").replace("\n", "_").replace(".", "_")[:50]
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        task_id_str = f"task_{task_id}_" if task_id is not None else ""
+        traj_subfolder_name = f"{task_id_str}{processed_task_description}_{timestamp}"
+        traj_subfolder = os.path.join(cfg.save_traj_dir, traj_subfolder_name)
+        os.makedirs(traj_subfolder, exist_ok=True)
 
     # Run episode
     success = False
@@ -279,6 +296,31 @@ def run_episode(
                 action_queue.extend(actions)
                 cot_replay.append(cot_text)
 
+            # Save the inputs and CoT text for this timestep if traj saving is enabled
+            if getattr(cfg, "save_traj", False) and traj_subfolder is not None:
+                step_idx = t - cfg.num_steps_wait
+                subsubfolder = os.path.join(traj_subfolder, f"step_{step_idx}")
+                os.makedirs(subsubfolder, exist_ok=True)
+
+                # Prepare front and wrist images exactly as model input
+                front_image_pil = prepare_image_for_vla(observation["full_image"])
+                wrist_image_pil = prepare_image_for_vla(observation["wrist_image"])
+
+                # Save the images (wrist named "wrist", front named "front")
+                front_image_pil.save(os.path.join(subsubfolder, "front.png"))
+                wrist_image_pil.save(os.path.join(subsubfolder, "wrist.png"))
+
+                # Get current CoT text
+                active_cot = cot_replay[-1] if len(cot_replay) > 0 else ""
+
+                # Store entry
+                traj_entries.append({
+                    "task": task_description,
+                    "timepoint": step_idx,
+                    "location": os.path.abspath(subsubfolder),
+                    "cot_text": active_cot
+                })
+
             # Get action from queue
             action = action_queue.popleft()
 
@@ -296,6 +338,17 @@ def run_episode(
 
     except Exception as e:
         log_message(f"Episode error: {e}", log_file)
+
+    # Save trajectory jsonl file at the end of the episode if enabled
+    if getattr(cfg, "save_traj", False) and traj_subfolder is not None and len(traj_entries) > 0:
+        jsonl_path = os.path.join(traj_subfolder, "trajectory.jsonl")
+        try:
+            with open(jsonl_path, "w") as f:
+                for entry in traj_entries:
+                    f.write(json.dumps(entry) + "\n")
+            log_message(f"Saved trajectory data to {jsonl_path}", log_file)
+        except Exception as e:
+            log_message(f"Failed to save trajectory jsonl: {e}", log_file)
 
     return success, replay_images
 
@@ -329,7 +382,7 @@ def run_task(
     else:
         raise('now is not supported')
 
-    save_video = (task_id % 25 == 0)                                    # saving video every 25 runs
+    save_video = (task_id % 1 == 0)                                    # saving video every 25 runs -- changed to save every video
 
     # Run episode
     success, replay_images = run_episode(
@@ -343,11 +396,14 @@ def run_task(
         initial_state,
         save_video,
         log_file,
+        task_id=task_id,
     )
 
+    # import pdb; pdb.set_trace()
     if save_video:
         save_rollout_video(
-            replay_images, success=success, task_description=task_description, log_file=log_file, episode_id=task_id
+            replay_images, success=success, task_description=task_description, log_file=log_file, episode_id=task_id,
+            suffix=Path(cfg.pretrained_checkpoint).name,
         )
 
     # Log results
@@ -382,7 +438,27 @@ def eval_libero(cfg: GenerateConfig) -> float:
     # Initialize LIBERO task suite
     benchmark_dict = benchmark.get_benchmark_dict()
     task_suite = benchmark_dict[cfg.task_suite_name]()
-    num_tasks = min(task_suite.n_tasks, 500)
+
+    def normalize_category(cat):
+        if cat is None:
+            return ""
+        return cat.lower().replace(" ", "_").replace("-", "_").strip()
+
+    # Filter task IDs by perturbation type if specified
+    all_task_ids = list(range(task_suite.n_tasks))
+    if cfg.perturbation_type is not None:
+        target_norm = normalize_category(cfg.perturbation_type)
+        filtered_task_ids = [
+            tid for tid in all_task_ids
+            if normalize_category(name_to_category.get(task_suite.get_task_names()[tid], None)) == target_norm
+        ]
+        log_message(f"Filtering evaluation for perturbation type: '{cfg.perturbation_type}' (normalized: '{target_norm}'). Found {len(filtered_task_ids)} matching tasks.", log_file)
+    else:
+        filtered_task_ids = all_task_ids
+
+    # num_tasks = min(len(filtered_task_ids), 1200)                              # changed to run for only 500 tasks
+    num_tasks = len(filtered_task_ids) - 1200
+    task_ids_to_evaluate = filtered_task_ids[:num_tasks]
 
     log_message(f"Task suite: {cfg.task_suite_name}", log_file)
 
@@ -407,8 +483,8 @@ def eval_libero(cfg: GenerateConfig) -> float:
     }
     total_successes = 0
     checkpoint_name = Path(cfg.pretrained_checkpoint).name
-    for task_id in tqdm.tqdm(range(num_tasks)):
-        # task_id = 0
+    for idx, task_id in enumerate(tqdm.tqdm(task_ids_to_evaluate)):
+        task_id += 1200                                                                  # running 2000-2500
         success = run_task(
             cfg,
             task_suite,
@@ -419,19 +495,22 @@ def eval_libero(cfg: GenerateConfig) -> float:
             processor,
             log_file,
         )
-        result_success_dict[name_to_category[task_suite.get_task_names()[task_id]]] += 1 if success else 0
-        result_fail_dict[name_to_category[task_suite.get_task_names()[task_id]]] += 1 if not success else 0
+        task_name = task_suite.get_task_names()[task_id]
+        category = name_to_category.get(task_name, None)
+        if category in result_success_dict:
+            result_success_dict[category] += 1 if success else 0
+            result_fail_dict[category] += 1 if not success else 0
         if success:
             total_successes += 1
             
-        if (task_id + 1) % 10 == 0:
-            with open(f"{cfg.task_suite_name.lower()}_{checkpoint_name}_success_outcome.json", "w") as f:
+        if (idx + 1) % 10 == 0:
+            with open(f"{cfg.task_suite_name.lower()}_{checkpoint_name}_success_outcome2.json", "w") as f:              # changed
                 json.dump(result_success_dict, f, indent=4)
-            with open(f"{cfg.task_suite_name.lower()}_{checkpoint_name}_fail_outcome.json", "w") as f:
+            with open(f"{cfg.task_suite_name.lower()}_{checkpoint_name}_fail_outcome2.json", "w") as f:                 # changed
                 json.dump(result_fail_dict, f, indent=4)
 
     # Calculate final success rate
-    final_success_rate = float(total_successes) / float(num_tasks)
+    final_success_rate = float(total_successes) / float(num_tasks) if num_tasks > 0 else 0.0
 
     # Log final results
     log_message("Final results:", log_file)
@@ -440,9 +519,9 @@ def eval_libero(cfg: GenerateConfig) -> float:
     log_message(f"Overall success rate: {final_success_rate:.4f} ({final_success_rate * 100:.1f}%)", log_file)
 
     # Close log file
-    with open(f"{cfg.task_suite_name.lower()}_{checkpoint_name}_success_outcome.json", "w") as f:
+    with open(f"{cfg.task_suite_name.lower()}_{checkpoint_name}_success_outcome2.json", "w") as f:              # changed
         json.dump(result_success_dict, f, indent=4)
-    with open(f"{cfg.task_suite_name.lower()}_{checkpoint_name}_fail_outcome.json", "w") as f:
+    with open(f"{cfg.task_suite_name.lower()}_{checkpoint_name}_fail_outcome2.json", "w") as f:                 # changed
         json.dump(result_fail_dict, f, indent=4)
     if log_file:
         log_file.close()

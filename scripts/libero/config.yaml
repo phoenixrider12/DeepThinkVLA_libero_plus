@@ -1,0 +1,5 @@
+assets: /data/aryaman/DeepThinkVLA_libero_plus/libero/libero/./assets
+bddl_files: /data/aryaman/DeepThinkVLA_libero_plus/libero/libero/./bddl_files
+benchmark_root: /data/aryaman/DeepThinkVLA_libero_plus/libero/libero
+datasets: /data/aryaman/DeepThinkVLA_libero_plus/libero/libero/../datasets
+init_states: /data/aryaman/DeepThinkVLA_libero_plus/libero/libero/./init_files

@@ -73,9 +73,10 @@ def get_libero_wrist_image(obs):
     return img
 
 
-def save_rollout_video(rollout_images, success, task_description, log_file=None, episode_id=None):
+def save_rollout_video(rollout_images, success, task_description, log_file=None, episode_id=None, suffix=None):
     """Saves an MP4 replay of an episode."""
-    rollout_dir = f"./rollouts_base/{DATE}"
+    rollout_dir_name = suffix if suffix is not None else "suffix"
+    rollout_dir = f"./rollouts_{rollout_dir_name}/{DATE}"
     os.makedirs(rollout_dir, exist_ok=True)
     processed_task_description = task_description.lower().replace(" ", "_").replace("\n", "_").replace(".", "_")[:50]
     episode_str = f"--ep={episode_id}" if episode_id is not None else ""

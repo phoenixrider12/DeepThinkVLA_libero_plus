@@ -10,6 +10,12 @@ physical-intelligence/
 libero/datasets
 libero/libero/assets
 rollouts/
+rollouts_*/
+old_rollouts/
+experiments/saved_trajectories/
+experiments/saved_trajectories_language_instructions/
+*_success_outcome.json
+*_fail_outcome.json
 logs/
 logs_mask_cot/
 logs_mask_cot_random/
