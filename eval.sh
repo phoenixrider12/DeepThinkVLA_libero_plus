@@ -26,5 +26,13 @@ python experiments/run_libero_plus_eval.py \
     --swanlab_mode $SWANLAB_MODE \
     --seed 429 \
     --panel_width_px 812 \
+    --video_save_freq 1 \
+    --task_start 1200 \
+    # --task_end 1200 \
     # --save_traj True \
     # --perturbation_type "robot_initial_states"
+
+
+# Split a run into chunks via task_start/task_end (output JSON names include the range, so they won't collide).
+#   First chunk:  --task_start 0    --task_end 1200
+#   Second chunk: --task_start 1200            (omit --task_end to run to the end)

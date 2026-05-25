@@ -120,6 +120,9 @@ class GenerateConfig:
     save_traj: bool = False                          # Whether to save trajectories in the new format
     save_traj_dir: str = "./experiments/saved_trajectories" # Directory to save trajectories
     perturbation_type: Optional[str] = None          # If specified, filter and only run evaluation for this perturbation type
+    video_save_freq: int = 1                         # Save a rollout video every N tasks (1 = every task, 0 = never)
+    task_start: int = 0                              # Start index (inclusive) into the (filtered) task list
+    task_end: Optional[int] = None                   # End index (exclusive) into the task list; None = run to the end
 
     # fmt: on
 
@@ -382,7 +385,7 @@ def run_task(
     else:
         raise('now is not supported')
 
-    save_video = (task_id % 1 == 0)                                    # saving video every 25 runs -- changed to save every video
+    save_video = (cfg.video_save_freq > 0 and task_id % cfg.video_save_freq == 0)     # save a rollout video every cfg.video_save_freq tasks
 
     # Run episode
     success, replay_images = run_episode(
@@ -456,11 +459,16 @@ def eval_libero(cfg: GenerateConfig) -> float:
     else:
         filtered_task_ids = all_task_ids
 
-    # num_tasks = min(len(filtered_task_ids), 1200)                              # changed to run for only 500 tasks
-    num_tasks = len(filtered_task_ids) - 1200
-    task_ids_to_evaluate = filtered_task_ids[:num_tasks]
+    # Select the slice of tasks to evaluate. Lets a run be split into chunks (e.g. [0:1200] and [1200:end])
+    # by setting --task_start / --task_end, instead of hardcoding the offset.
+    task_start = cfg.task_start
+    task_end = cfg.task_end if cfg.task_end is not None else len(filtered_task_ids)
+    task_ids_to_evaluate = filtered_task_ids[task_start:task_end]
+    num_tasks = len(task_ids_to_evaluate)
+    range_tag = f"{task_start}_{task_end}"                                       # included in output filenames so chunks don't collide
 
     log_message(f"Task suite: {cfg.task_suite_name}", log_file)
+    log_message(f"Evaluating task indices [{task_start}:{task_end}] ({num_tasks} tasks)", log_file)
 
     # Start evaluation
     result_success_dict = {
@@ -482,9 +490,9 @@ def eval_libero(cfg: GenerateConfig) -> float:
         'Sensor Noise': 0,
     }
     total_successes = 0
+    episode_results = []                                                             # per-episode records (task name, episode, success)
     checkpoint_name = Path(cfg.pretrained_checkpoint).name
     for idx, task_id in enumerate(tqdm.tqdm(task_ids_to_evaluate)):
-        task_id += 1200                                                                  # running 2000-2500
         success = run_task(
             cfg,
             task_suite,
@@ -502,12 +510,20 @@ def eval_libero(cfg: GenerateConfig) -> float:
             result_fail_dict[category] += 1 if not success else 0
         if success:
             total_successes += 1
+        episode_results.append({
+            "task_id": int(task_id),
+            "task_name": task_name,
+            "category": category,
+            "success": bool(success),
+        })
             
         if (idx + 1) % 10 == 0:
-            with open(f"{cfg.task_suite_name.lower()}_{checkpoint_name}_success_outcome2.json", "w") as f:              # changed
+            with open(f"{cfg.task_suite_name.lower()}_{checkpoint_name}_{range_tag}_success_outcome.json", "w") as f:
                 json.dump(result_success_dict, f, indent=4)
-            with open(f"{cfg.task_suite_name.lower()}_{checkpoint_name}_fail_outcome2.json", "w") as f:                 # changed
+            with open(f"{cfg.task_suite_name.lower()}_{checkpoint_name}_{range_tag}_fail_outcome.json", "w") as f:
                 json.dump(result_fail_dict, f, indent=4)
+            with open(f"{cfg.task_suite_name.lower()}_{checkpoint_name}_{range_tag}_episodes.json", "w") as f:          # per-episode outcomes
+                json.dump(episode_results, f, indent=4)
 
     # Calculate final success rate
     final_success_rate = float(total_successes) / float(num_tasks) if num_tasks > 0 else 0.0
@@ -519,10 +535,12 @@ def eval_libero(cfg: GenerateConfig) -> float:
     log_message(f"Overall success rate: {final_success_rate:.4f} ({final_success_rate * 100:.1f}%)", log_file)
 
     # Close log file
-    with open(f"{cfg.task_suite_name.lower()}_{checkpoint_name}_success_outcome2.json", "w") as f:              # changed
+    with open(f"{cfg.task_suite_name.lower()}_{checkpoint_name}_{range_tag}_success_outcome.json", "w") as f:
         json.dump(result_success_dict, f, indent=4)
-    with open(f"{cfg.task_suite_name.lower()}_{checkpoint_name}_fail_outcome2.json", "w") as f:                 # changed
+    with open(f"{cfg.task_suite_name.lower()}_{checkpoint_name}_{range_tag}_fail_outcome.json", "w") as f:
         json.dump(result_fail_dict, f, indent=4)
+    with open(f"{cfg.task_suite_name.lower()}_{checkpoint_name}_{range_tag}_episodes.json", "w") as f:          # per-episode outcomes
+        json.dump(episode_results, f, indent=4)
     if log_file:
         log_file.close()
 
