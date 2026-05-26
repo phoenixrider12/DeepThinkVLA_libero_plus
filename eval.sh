@@ -17,7 +17,7 @@ export SAPIEN_RENDERER=cpu
 # (Matching is robust, case-insensitive, and supports snake_case, e.g. "robot_initial_states" works too)
 
 python experiments/run_libero_plus_eval.py \
-    --pretrained_checkpoint checkpoints/grad_loss_cot \
+    --pretrained_checkpoint checkpoints/base_cot \
     --num_images_in_input 2 \
     --task_suite_name libero_10 \
     --max_new_tokens 2048 \
@@ -27,8 +27,8 @@ python experiments/run_libero_plus_eval.py \
     --seed 429 \
     --panel_width_px 812 \
     --video_save_freq 1 \
-    --task_start 1200 \
-    # --task_end 1200 \
+    --task_start 600 \
+    --task_end 1200 \
     # --save_traj True \
     # --perturbation_type "robot_initial_states"
 

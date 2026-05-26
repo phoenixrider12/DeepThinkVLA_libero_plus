@@ -12,10 +12,14 @@ libero/libero/assets
 rollouts/
 rollouts_*/
 old_rollouts/
+*_divergence_videos/
 experiments/saved_trajectories/
 experiments/saved_trajectories_language_instructions/
-*_success_outcome.json
-*_fail_outcome.json
+# Ignore all generated JSON artifacts (eval outcomes, per-episode results, divergences),
+# but keep the two original config/data files the code depends on.
+*.json
+!name_to_category.json
+!libero/libero/benchmark/task_classification.json
 logs/
 logs_mask_cot/
 logs_mask_cot_random/
